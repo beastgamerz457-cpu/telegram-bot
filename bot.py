@@ -1,58 +1,66 @@
 import os
+import threading
 import json
+import gspread
+from flask import Flask
 import telebot
 from telebot import types
-import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# ===== Environment Variables =====
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Railway pe env var me set karna hoga
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS")  # poora JSON string
-SHEET_NAME = os.getenv("SHEET_NAME", "Video_Submissions")  # default name
+# ------------------- CONFIG -------------------
+BOT_TOKEN = "8449940203:AAEzE4HenalM0YuO5joqnNZIC2bLs3ACDLg"  # Tera bot token fixed
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_SHEET_CREDENTIALS_JSON")  # Render env var me dalna
+SHEET_NAME = "Video_Submissions - Mr Profit"  # Tera sheet name fixed
 
-# Bot setup
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# ===== Google Sheets Auth =====
-creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+# ------------------- GOOGLE SHEETS SETUP -------------------
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_dict = json.loads(GOOGLE_CREDENTIALS)
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
-
-# Open Google Sheet
 sheet = client.open(SHEET_NAME).sheet1
 
-# ===== Banner Path =====
-BANNER_PATH = "banner.jpg"  # Banner file ko project folder me rakho
+# ------------------- TELEGRAM BOT -------------------
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# ===== Start Command =====
+# Flask server for Render
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running on Render 🚀"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+# ------------------- HANDLERS -------------------
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    try:
-        with open(BANNER_PATH, 'rb') as banner:
-            bot.send_photo(message.chat.id, banner)
-    except:
-        bot.send_message(message.chat.id, "🎱 Paste the link of your short video")
+    banner_url = "https://i.ibb.co/0cLzBRy/banner.jpg"  # Apna banner link dal
+    bot.send_photo(message.chat.id, banner_url, caption="🎱 Paste the link of your short video")
+
+@bot.message_handler(func=lambda message: True)
+def handle_video_link(message):
+    if message.text.startswith("http"):
+        name = message.from_user.first_name
+        username = f"@{message.from_user.username}" if message.from_user.username else "N/A"
+        link = message.text
+
+        # Save to Google Sheet
+        sheet.append_row([name, username, link])
+
+        # Success message with button
+        markup = types.InlineKeyboardMarkup()
+        restart_btn = types.InlineKeyboardButton("Submit Another Video", callback_data="restart")
+        markup.add(restart_btn)
+        bot.send_message(message.chat.id, "✅ Your video has been submitted successfully", reply_markup=markup)
     else:
-        bot.send_message(message.chat.id, "🎱 Paste the link of your short video")
-    
-    bot.register_next_step_handler(message, process_video_link)
+        bot.send_message(message.chat.id, "❌ Please send a valid video link starting with http or https.")
 
-# ===== Process Video Link =====
-def process_video_link(message):
-    video_link = message.text
-    username = message.from_user.username if message.from_user.username else "No Username"
-    full_name = message.from_user.first_name
-    sheet.append_row([full_name, username, video_link])
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Submit another video", callback_data="submit_another"))
-    bot.send_message(message.chat.id, "✅ Your video has been submitted successfully", reply_markup=markup)
-
-# ===== Handle Button Click =====
-@bot.callback_query_handler(func=lambda call: call.data == "submit_another")
-def handle_submit_another(call):
+@bot.callback_query_handler(func=lambda call: call.data == "restart")
+def restart_flow(call):
     send_welcome(call.message)
 
-print("Bot is running on Railway...")
-bot.polling()
+# ------------------- MAIN -------------------
+if _name_ == "_main_":
+    threading.Thread(target=run).start()
+    bot.polling(non_stop=True)
